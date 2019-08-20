@@ -33,6 +33,38 @@ func BenchmarkJpegInfo(b *testing.B) {
 	f.Close()
 }
 
+func TestFormats(t *testing.T) {
+	// XXX Could use testing properly for this
+	table := []struct {
+		Path string
+		Info ImageInfo
+	}{
+		{
+			Path: "test.jpg",
+			Info: ImageInfo{
+				Size: ImageSize{Width: 4032, Height: 3024},
+				Type: JPEG,
+			},
+		},
+	}
+
+	for _, test := range table {
+		f, err := os.Open(test.Path)
+		if err != nil {
+			t.Errorf("open '%s' failed: %s", test.Path, err)
+			continue
+		}
+		defer f.Close()
+		info, err := Detect(f)
+		if err != nil {
+			t.Errorf("'%s' failed: %s", test.Path, err)
+			continue
+		}
+		t.Logf("'%s': %+v", test.Path, info)
+		// XXX compare
+	}
+}
+
 /*
 
 import (

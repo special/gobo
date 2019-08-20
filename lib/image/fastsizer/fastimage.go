@@ -1,6 +1,7 @@
 package fastsizer
 
 import (
+	"errors"
 	"fmt"
 	"io"
 )
@@ -10,6 +11,46 @@ type ImageInfo struct {
 	Type     ImageType
 	Rotation int
 	Mirror   MirrorDirection
+}
+
+func Detect(r io.Reader) (ImageInfo, error) {
+	var re ImageInfo
+	handler, err := detectTypeHandler(r)
+	if err != nil {
+		return re, err
+	}
+
+	return handler.Info(r)
+}
+
+type typeHandler interface {
+	Info(r io.Reader) (ImageInfo, error)
+}
+
+func detectTypeHandler(r io.Reader) (typeHandler, error) {
+	buf := make([]byte, 2)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+
+	if buf[0] == 'B' && buf[1] == 'M' {
+		// BMP
+	} else if buf[0] == 0x47 && buf[1] == 0x49 {
+		// GIF
+	} else if buf[0] == 0xff && buf[1] == 0xd8 {
+		// JPEG
+		return &jpegHandler{}, nil
+	} else if buf[0] == 0x89 && buf[1] == 0x50 {
+		// PNG
+	} else if (buf[0] == 'I' && buf[1] == 'I') || (buf[0] == 'M' && buf[1] == 'M') {
+		// TIFF
+	} else if buf[0] == 'R' && buf[1] == 'I' {
+		// WEBP
+	} else {
+		return nil, errors.New("unknown image type")
+	}
+
+	return nil, errors.New("not implemented")
 }
 
 // FastImage instance needs to be initialized before use
@@ -68,13 +109,6 @@ func (this *FastImage) detectInternal(d *decoder, reader io.Reader) (ImageInfo, 
 		case 0x49:
 			info.Type = GIF
 			info.Size, e = d.getGIFImageSize()
-			ok = true
-		}
-	case 0xFF:
-		switch this.tb[1] {
-		case 0xD8:
-			info.Type = JPEG
-			e = d.getJPEGInfo(&info)
 			ok = true
 		}
 	case 0x89:

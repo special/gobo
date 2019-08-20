@@ -1,104 +1,96 @@
 package fastsizer
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 )
 
-func (f *decoder) getJPEGInfo(info *ImageInfo) error {
-	offset := 2
-	var err error
-	tmp := make([]byte, 2)
+type jpegHandler struct {
+	r  *bufio.Reader
+	re ImageInfo
+}
+
+func (h *jpegHandler) Info(r io.Reader) (ImageInfo, error) {
+	h.r = bufio.NewReader(r)
+	h.re.Type = JPEG
+
 	for {
-		tmp, err = f.reader.Slice(offset, 2)
+		// Discard until next marker
+		_, err := h.r.ReadBytes(0xff)
 		if err != nil {
-			return err
+			return h.re, err
 		}
-		offset += 2
-		for tmp[0] != 0xff {
-			tmp[0] = tmp[1]
-			tmp[1], err = f.reader.ReadByte()
-			if err != nil {
-				return err
-			}
-			offset++
+		marker, err := h.r.ReadByte()
+		if err != nil {
+			return h.re, err
 		}
-		marker := tmp[1]
 		if marker == 0 {
 			continue
 		}
+
+		// Skip 0xff padding
 		for marker == 0xff {
-			marker, err = f.reader.ReadByte()
+			marker, err = h.r.ReadByte()
 			if err != nil {
-				return err
+				return h.re, err
 			}
-			offset++
 		}
+
 		if marker == eoiMarker {
-			break
-		}
-		if rst0Marker <= marker && marker <= rst7Marker {
+			return h.re, errors.New("end of image")
+		} else if marker >= rst0Marker && marker <= rst7Marker {
 			continue
 		}
-		_, err = f.reader.ReadFull(tmp)
-		if err != nil {
-			return err
+
+		// Read segment size
+		buf := make([]byte, 2)
+		if _, err := io.ReadFull(h.r, buf); err != nil {
+			return h.re, err
 		}
-		offset += 2
-		n := int(tmp[0])<<8 + int(tmp[1]) - 2
-		if n < 0 {
-			return fmt.Errorf("short segment length")
+		length := int(buf[0])<<8 + int(buf[1]) - 2
+		if length < 0 {
+			return h.re, errors.New("short segment length")
 		}
+
 		switch marker {
 		case sof0Marker, sof1Marker, sof2Marker:
-			tmp, err = f.reader.Slice(offset, n)
-			if err == nil {
-				if tmp[0] != 8 {
-					err = fmt.Errorf("only support 8-bit precision")
-					return err
-				} else {
-					info.Size = ImageSize{
-						Width:  uint32(int(tmp[3])<<8 + int(tmp[4])),
-						Height: uint32(int(tmp[1])<<8 + int(tmp[2])),
-					}
-					return nil
-				}
+			buf = make([]byte, 5)
+			if _, err := io.ReadFull(h.r, buf); err != nil {
+				return h.re, err
+			} else if buf[0] != 8 {
+				return h.re, errors.New("only 8-bit precision is supported")
 			}
-		case dhtMarker, dqtMarker, driMarker, app0Marker, app14Marker:
-			offset += n
-		case sosMarker:
-			return fmt.Errorf("meet sos marker")
+
+			h.re.Size = ImageSize{
+				Width:  uint32(int(buf[3])<<8 + int(buf[4])),
+				Height: uint32(int(buf[1])<<8 + int(buf[2])),
+			}
+			return h.re, nil
+
 		case app1Marker:
-			if !f.minimal {
-				if err := f.readExif(info, offset, n); err != nil {
-					return err
-				}
+			if err := h.readExif(length); err != nil {
+				return h.re, nil
 			}
-			offset += n
+
+		case sosMarker:
+			return h.re, errors.New("reached sos marker")
+
 		default:
-			if app0Marker <= marker && marker <= app15Marker || marker == comMarker {
-				offset += n
-			} else if marker < 0xc0 {
-				err = fmt.Errorf("unknown marker")
-			} else {
-				err = fmt.Errorf("unsupport marker")
+			if _, err := h.r.Discard(length); err != nil {
+				return h.re, err
 			}
-		}
-		if err != nil {
-			return err
 		}
 	}
-	return fmt.Errorf("fail get size")
 }
 
 var errNotExif = errors.New("not exif")
 
 // Adapted from https://github.com/disintegration/imageorient/
-func (f *decoder) readExif(info *ImageInfo, offs, n int) error {
+func (h *jpegHandler) readExif(n int) error {
 	// EXIF marker
 	const (
 		markerSOI      = 0xffd8
@@ -111,7 +103,7 @@ func (f *decoder) readExif(info *ImageInfo, offs, n int) error {
 
 	// XXX This is a lazy way to avoid rewriting the logic
 	buf := make([]byte, n)
-	if _, err := f.reader.ReadFull(buf); err != nil {
+	if _, err := io.ReadFull(h.r, buf); err != nil {
 		return err
 	}
 	r := bytes.NewBuffer(buf)
@@ -191,21 +183,21 @@ func (f *decoder) readExif(info *ImageInfo, offs, n int) error {
 
 		switch val {
 		case 2:
-			info.Mirror = MirrorHorizontal
+			h.re.Mirror = MirrorHorizontal
 		case 3:
-			info.Rotation = 180
+			h.re.Rotation = 180
 		case 4:
-			info.Mirror = MirrorVertical
+			h.re.Mirror = MirrorVertical
 		case 5:
-			info.Mirror = MirrorHorizontal
+			h.re.Mirror = MirrorHorizontal
 			fallthrough
 		case 8:
-			info.Rotation = 270
+			h.re.Rotation = 270
 		case 7:
-			info.Mirror = MirrorHorizontal
+			h.re.Mirror = MirrorHorizontal
 			fallthrough
 		case 6:
-			info.Rotation = 90
+			h.re.Rotation = 90
 		}
 
 		return nil
