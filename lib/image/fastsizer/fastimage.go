@@ -28,13 +28,14 @@ type typeHandler interface {
 }
 
 func detectTypeHandler(r io.Reader) (typeHandler, error) {
+	// XXX would probably be better to set up the bufio here and peek
 	buf := make([]byte, 2)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, err
 	}
 
 	if buf[0] == 'B' && buf[1] == 'M' {
-		// BMP
+		return &bmpHandler{}, nil
 	} else if buf[0] == 0x47 && buf[1] == 0x49 {
 		// GIF
 	} else if buf[0] == 0xff && buf[1] == 0xd8 {
@@ -50,8 +51,10 @@ func detectTypeHandler(r io.Reader) (typeHandler, error) {
 		return nil, errors.New("unknown image type")
 	}
 
-	return nil, errors.New("not implemented")
+	return nil, errors.New("not implemented") // XXX
 }
+
+// ------- XXX
 
 // FastImage instance needs to be initialized before use
 type FastImage struct {
@@ -97,13 +100,6 @@ func (this *FastImage) detectInternal(d *decoder, reader io.Reader) (ImageInfo, 
 	ok := false
 
 	switch this.tb[0] {
-	case 'B':
-		switch this.tb[1] {
-		case 'M':
-			info.Type = BMP
-			info.Size, e = d.getBMPImageSize()
-			ok = true
-		}
 	case 0x47:
 		switch this.tb[1] {
 		case 0x49:
